@@ -1,0 +1,596 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#070a12">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Market Frequency · NorthWaves</title>
+<meta name="description" content="Live crypto order flow played as music. Every trade is a note.">
+<!-- Market Frequency, phone app. NorthWaves, created by Anton Nordström.
+     Live trades from the Binance public stream; falls back to a labelled simulation if it cannot connect. -->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: one-screen instrument. Top bar, radar ring filling the middle, a bottom sheet with tabs.
+   Deliberately single-theme (a dark stage), so every color is set explicitly. */
+:root{
+  --stage:#070a12; --sheet:#0e1320; --raise:#161d2e; --line:#222b40; --ink:#e8ecf5; --ink-2:#9aa4ba; --ink-3:#5f6982;
+  --accent:#5aa9ff; --btc:#f5b942; --eth:#8f9bff; --sol:#3ee6c4; --buy:#39f0a0; --sell:#ff5c93;
+  --display:"Space Grotesk",system-ui,sans-serif; --mono:"JetBrains Mono",ui-monospace,Menlo,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{height:100%;margin:0}
+html{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+body{background:var(--stage);color:var(--ink);font:13px/1.45 var(--mono);overflow:hidden}
+button,select,input{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.app{height:100%;max-width:520px;margin:0 auto;display:flex;flex-direction:column;
+  padding-block:10px 8px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));gap:8px}
+/* top bar */
+.top{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.brand{font:700 15px var(--display);letter-spacing:.16em}
+.brand span{color:var(--accent)}
+.feed{display:flex;align-items:center;gap:6px;font-size:10px;letter-spacing:.12em;color:var(--ink-2);border:1px solid var(--line);border-radius:99px;padding:3px 9px}
+.feed i{width:6px;height:6px;border-radius:50%;background:var(--ink-3)}
+.feed.live{color:var(--buy)} .feed.live i{background:var(--buy);box-shadow:0 0 8px var(--buy)}
+.feed.sim{color:var(--btc)} .feed.sim i{background:var(--btc);box-shadow:0 0 8px var(--btc)}
+.src{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.src button{background:var(--raise);border:1px solid var(--line);border-radius:12px;padding:9px 0;font-weight:600}
+.src button[aria-pressed="true"]{border-color:var(--accent);color:var(--accent)}
+.steer button:disabled{opacity:.35;cursor:not-allowed}
+.note{color:var(--ink-3);font-size:11px;margin:-4px 0 0}
+.foot a{color:var(--accent);text-decoration:none}
+/* stage */
+.stage{position:relative;flex:1;min-height:220px;border-radius:24px;background:radial-gradient(closest-side,#0d1424,var(--stage));overflow:hidden}
+#ring{position:absolute;inset:0;width:100%;height:100%;display:block}
+.hud{position:absolute;left:14px;top:12px;display:flex;flex-direction:column;gap:1px;pointer-events:none}
+.mode{font:700 24px/1 var(--display);letter-spacing:.06em}
+.mood{color:var(--accent)}
+.meta{color:var(--ink-2);font-size:11px}
+.modebar{display:flex;gap:3px;margin-top:6px;width:120px}
+.modebar span{flex:1;height:4px;border-radius:2px;background:var(--line)}
+.modebar span.on{background:var(--accent);box-shadow:0 0 6px var(--accent)}
+#scope{position:absolute;left:0;right:0;bottom:0;height:44px;width:100%;display:block;pointer-events:none}
+.play{position:absolute;right:14px;bottom:14px;width:64px;height:64px;border-radius:50%;border:0;background:var(--accent);color:#04101f;
+  font:700 22px var(--display);display:grid;place-items:center;box-shadow:0 0 0 6px rgba(90,169,255,.15),0 10px 30px rgba(90,169,255,.35)}
+.play.on{background:var(--raise);color:var(--ink);box-shadow:0 0 0 1px var(--line)}
+.hint{position:absolute;right:88px;bottom:34px;color:var(--ink-2);font-size:11px;pointer-events:none}
+/* sheet */
+.sheet{background:var(--sheet);border:1px solid var(--line);border-radius:22px;padding:10px;display:flex;flex-direction:column;gap:10px}
+.tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;background:var(--stage);border-radius:12px;padding:3px}
+.tabs button{background:none;border:0;border-radius:9px;padding:7px 0;color:var(--ink-2);letter-spacing:.1em;font-size:11px}
+.tabs button[aria-selected="true"]{background:var(--raise);color:var(--ink)}
+.pane{height:212px;overflow:auto;display:flex;flex-direction:column;gap:10px}
+/* voices */
+.voice{display:grid;grid-template-columns:auto 1fr auto;gap:4px 10px;align-items:center;padding:4px 2px}
+.chip{display:flex;align-items:center;gap:6px;background:var(--raise);border:1px solid var(--line);border-radius:10px;padding:5px 9px;font-weight:600}
+.chip i{width:8px;height:8px;border-radius:50%}
+.chip[aria-pressed="false"]{opacity:.4;text-decoration:line-through}
+.inst{color:var(--ink-3);font-size:11px}
+.px{text-align:right;font-variant-numeric:tabular-nums;font-weight:600}
+.press{grid-column:1/-1;display:flex;height:5px;border-radius:3px;overflow:hidden;background:var(--sell)}
+.press b{background:var(--buy);transition:width .3s}
+.vmeta{grid-column:1/-1;display:flex;justify-content:space-between;color:var(--ink-3);font-size:10.5px;font-variant-numeric:tabular-nums}
+.up{color:var(--buy)} .down{color:var(--sell)}
+/* steer */
+.label{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3)}
+.steer{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.steer button{background:var(--raise);border:1px solid var(--line);border-radius:12px;padding:10px 0 8px;display:flex;flex-direction:column;align-items:center;gap:2px;font-weight:600}
+.steer button small{color:var(--ink-3);font-weight:400;font-size:10px}
+.steer button[aria-pressed="true"]{border-color:var(--accent);color:var(--accent)}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.row label{display:flex;flex-direction:column;gap:4px}
+select,input[type=range]{width:100%;background:var(--raise);border:1px solid var(--line);border-radius:8px;padding:6px}
+input[type=range]{accent-color:var(--accent);padding:0}
+.toggles{display:flex;gap:6px;flex-wrap:wrap}
+.tg{background:var(--raise);border:1px solid var(--line);border-radius:99px;padding:5px 12px;font-size:11px;letter-spacing:.08em;color:var(--ink-2)}
+.tg[aria-pressed="true"]{border-color:var(--accent);color:var(--accent)}
+/* log */
+#log{list-style:none;margin:0;padding:0}
+#log li{padding:6px 2px;border-bottom:1px dashed var(--line);color:var(--ink-2)}
+#log li b{color:var(--ink)}
+#log time{color:var(--ink-3);margin-right:6px}
+.foot{color:var(--ink-3);font-size:10px;text-align:center}
+@media (max-height:640px){.pane{height:160px}}
+@media (prefers-reduced-motion:reduce){.press b{transition:none}}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="top">
+    <div class="brand">MARKET <span>FREQUENCY</span></div>
+    <div class="feed" id="feed"><i></i><span>CONNECTING</span></div>
+  </div>
+
+  <div class="stage">
+    <canvas id="ring" aria-label="Radar ring of trades: each dot is a trade, one lap is 60 seconds"></canvas>
+    <div class="hud">
+      <span class="mode" id="mode">MIXOLYDIAN</span>
+      <span class="mood" id="mood">confident</span>
+      <span class="meta" id="hudMeta">96 BPM · key D</span>
+      <div class="modebar" id="modebar" aria-hidden="true"></div>
+    </div>
+    <canvas id="scope" aria-hidden="true"></canvas>
+    <span class="hint" id="hint">tap to hear the market</span>
+    <button class="play" id="play" aria-label="Start sound">▶</button>
+  </div>
+
+  <div class="sheet">
+    <div class="tabs" role="tablist">
+      <button role="tab" aria-selected="true" aria-controls="p-voices" id="t-voices">VOICES</button>
+      <button role="tab" aria-selected="false" aria-controls="p-steer" id="t-steer">STEER</button>
+      <button role="tab" aria-selected="false" aria-controls="p-log" id="t-log">LOG</button>
+    </div>
+
+    <div class="pane" role="tabpanel" id="p-voices" aria-labelledby="t-voices"></div>
+
+    <div class="pane" role="tabpanel" id="p-steer" aria-labelledby="t-steer" hidden>
+      <span class="label">Market feed</span>
+      <div class="src" id="src">
+        <button data-src="live" aria-pressed="true">Live · Binance</button>
+        <button data-src="sim" aria-pressed="false">Simulated</button>
+      </div>
+      <span class="label">Push the simulated market</span>
+      <p class="note" id="steerNote">Switch to Simulated to steer. The real market can't be pushed.</p>
+      <div class="steer" id="steer">
+        <button data-s="rally" aria-pressed="false">Rally<small>buyers pile in</small></button>
+        <button data-s="calm" aria-pressed="true">Calm<small>quiet drift</small></button>
+        <button data-s="chaos" aria-pressed="false">Chaos<small>wild swings</small></button>
+        <button data-s="crash" aria-pressed="false">Crash<small>panic selling</small></button>
+      </div>
+      <div class="row">
+        <label for="key"><span class="label">Key</span><select id="key"></select></label>
+        <label for="whale"><span class="label">Whale ≥</span>
+          <select id="whale"><option value="100000">$100K</option><option value="250000" selected>$250K</option><option value="500000">$500K</option></select></label>
+      </div>
+      <label for="volume"><span class="label">Volume</span></label>
+      <input type="range" id="volume" min="0" max="1" step="0.01" value="0.8">
+      <div class="toggles">
+        <button class="tg" data-t="drums" aria-pressed="true">DRUMS</button>
+        <button class="tg" data-t="pad" aria-pressed="true">PAD</button>
+        <button class="tg" data-t="voice" aria-pressed="true">VOICE</button>
+      </div>
+    </div>
+
+    <div class="pane" role="tabpanel" id="p-log" aria-labelledby="t-log" hidden><ul id="log"></ul></div>
+
+    <div class="foot"><span id="footFeed">Connecting to Binance…</span> Buys play on the right, sells on the left. Not financial advice. <a href="index.html">NorthWaves</a></div>
+  </div>
+</div>
+
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+const gauss = () => { let u = 0, v = 0; while (!u) u = Math.random(); while (!v) v = Math.random(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); };
+const poisson = l => { let L = Math.exp(-l), k = 0, p = 1; do { k++; p *= Math.random(); } while (p > L); return k - 1; };
+const mtof = m => 440 * Math.pow(2, (m - 69) / 12);
+const fmtUsd = n => n >= 1e6 ? "$" + (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? "$" + Math.round(n / 1e3) + "K" : "$" + Math.round(n);
+const fmtPct = x => (x >= 0 ? "+" : "−") + Math.abs(x * 100).toFixed(2) + "%";
+const clock = () => new Date().toLocaleTimeString("en-GB", { hour12: false });
+
+/* ---------------- coins ---------------- */
+const ASSETS = [
+  { id: "BTC", name: "bitcoin", color: "#f5b942", inst: "bass",  band: [.22, .44], base: 36, span: 9,  dp: 0, p0: 92000, sig: .00045, lam: 14, q: .04 },
+  { id: "ETH", name: "ether",   color: "#8f9bff", inst: "bells", band: [.50, .70], base: 60, span: 12, dp: 2, p0: 3100,  sig: .0006,  lam: 8,  q: .7 },
+  { id: "SOL", name: "solana",  color: "#3ee6c4", inst: "pluck", band: [.76, .95], base: 72, span: 12, dp: 2, p0: 140,   sig: .0008,  lam: 7,  q: 14 },
+];
+for (const a of ASSETS) Object.assign(a, { sym: a.id.toLowerCase() + "usdt", burst: null, price: a.p0, lo: a.p0 * .999, hi: a.p0 * 1.001, hist: [], parts: [], pend: { n: 0, usd: 0, buy: 0, sell: 0 },
+  buyEw: 0, sellEw: 0, rate: 0, cnt: 0, typ: 5000, on: true, chg1: 0, volS: 0, volLong: 0, trendZ: 0, mom: 0, reg: 1 });
+
+const MODES = [
+  { name: "LYDIAN", steps: [0, 2, 4, 6, 7, 9, 11], mood: "euphoric" },
+  { name: "IONIAN", steps: [0, 2, 4, 5, 7, 9, 11], mood: "bright" },
+  { name: "MIXOLYDIAN", steps: [0, 2, 4, 5, 7, 9, 10], mood: "confident" },
+  { name: "DORIAN", steps: [0, 2, 3, 5, 7, 9, 10], mood: "restless" },
+  { name: "AEOLIAN", steps: [0, 2, 3, 5, 7, 8, 10], mood: "uneasy" },
+  { name: "PHRYGIAN", steps: [0, 1, 3, 5, 7, 8, 10], mood: "fearful" },
+];
+const KEYS = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+const PROG = [0, 5, 3, 4];
+const S = { mode: 2, target: 2, bpm: 96, targetBpm: 96, root: 2, trend: 0, volRatio: 1, rateTot: 0, buyShare: .5,
+  feed: "connecting", whale: 250000, drums: true, pad: true, voice: true, started: false, chord: 0, bar: 0, steer: "calm" };
+const notes = [], waves = [], callouts = [];
+
+/* ---------------- steering the simulation ---------------- */
+// Each scenario sets how hard buyers/sellers push (bias), how jumpy prices are (vol) and how busy trading is (busy).
+const STEER = { rally: { bias: .28, vol: 1.2, busy: 1.6 }, calm: { bias: 0, vol: .7, busy: .8 },
+                chaos: { bias: 0, vol: 3.2, busy: 2.6 }, crash: { bias: -.32, vol: 2.2, busy: 2.4 } };
+
+/* ---------------- trades ---------------- */
+function ingest(a, p, q, side, T) {
+  const now = performance.now(), usd = p * q;
+  if (a.lo === null) { a.lo = p * .9995; a.hi = p * 1.0005; }
+  a.price = p; a.cnt++;
+  if (p < a.lo) a.lo = p; if (p > a.hi) a.hi = p;
+  a.pend.n++; a.pend.usd += usd; a.pend[side] += usd;
+  if (side === "buy") a.buyEw += usd; else a.sellEw += usd;
+  const part = { t: now, p, usd, side };
+  a.parts.push(part);
+  if (a.burst && a.burst.T === T && a.burst.side === side) { a.burst.usd += usd; a.burst.q += q; a.burst.part = part; }
+  else { flushBurst(a); a.burst = { T, side, usd, q, p, at: now, part }; }
+}
+function flushBurst(a) {
+  const b = a.burst; a.burst = null;
+  if (b && b.usd >= S.whale) whale(a, b.side, b.usd, b.q, b.p, b.part);
+}
+setInterval(() => { const now = performance.now(); for (const a of ASSETS) if (a.burst && now - a.burst.at > 150) flushBurst(a); }, 100);
+function whale(a, side, usd, q, p, part) {
+  const now = performance.now();
+  waves.push({ t: now, a, part });
+  callouts.push({ t: now, a, part, side, text: `WHALE · ${a.id} ${side.toUpperCase()} ${fmtUsd(usd)}` });
+  if (callouts.length > 2) callouts.shift();
+  log(`<b style="color:${a.color}">WHALE ${a.id}</b> <span class="${side === "buy" ? "up" : "down"}">${side}</span> ${fmtUsd(usd)}`);
+  if (S.started && a.on) gong(ctx.currentTime + .02, side, clamp(Math.log10(usd / S.whale) * .6 + .55, .4, 1));
+  say(`Whale ${side}. ${q >= 100 ? Math.round(q) : q.toFixed(1)} ${a.name}.`);
+}
+
+setInterval(() => { // simulated order flow, 20 times a second
+  if (S.feed !== "sim") return;
+  const dt = .05, sc = STEER[S.steer];
+  for (const a of ASSETS) {
+    a.reg += (sc.vol - a.reg) * .02;
+    a.mom = clamp(a.mom * .995 + (sc.bias - a.mom) * .01 + gauss() * .012, -.45, .45);
+    a.price *= Math.exp(a.sig * Math.sqrt(dt) * (gauss() * a.reg + a.mom * 2.2));
+    const n = poisson(a.lam * sc.busy * dt);
+    for (let k = 0; k < n; k++) {
+      let q = a.q * Math.exp(gauss() * 1.1);
+      if (Math.random() < .0006 * sc.busy) q *= 60 + Math.random() * 200;
+      ingest(a, a.price * (1 + gauss() * a.sig * .1), q, Math.random() < .5 + a.mom ? "buy" : "sell", Math.random());
+    }
+  }
+}, 50);
+
+/* ---------------- live feed: Binance public aggTrade stream (no account, no key) ---------------- */
+const ENDPOINTS = ["wss://stream.binance.com:9443", "wss://data-stream.binance.vision"];
+const BY_SYM = Object.fromEntries(ASSETS.map(a => [a.sym.toUpperCase(), a]));
+let ws = null, feedGen = 0;
+function resetMarket(seedPrices) {
+  for (const a of ASSETS) {
+    Object.assign(a, { hist: [], parts: [], burst: null, pend: { n: 0, usd: 0, buy: 0, sell: 0 }, buyEw: 0, sellEw: 0, rate: 0, cnt: 0,
+      chg1: 0, volS: 0, volLong: 0, trendZ: 0, mom: 0, reg: 1, lo: null, hi: null });
+    if (seedPrices) { a.price = a.price || a.p0; a.lo = a.price * .9995; a.hi = a.price * 1.0005; }
+  }
+  waves.length = callouts.length = 0;
+}
+function setFeed(kind) {
+  S.feed = kind;
+  const f = $("#feed");
+  f.className = "feed " + (kind === "live" ? "live" : kind === "sim" ? "sim" : "");
+  f.querySelector("span").textContent = kind === "live" ? "LIVE · BINANCE" : kind === "sim" ? "SIMULATED" : "CONNECTING";
+  $("#footFeed").textContent = kind === "live" ? "Live trades from Binance." : kind === "sim" ? "Simulated prices, not live data." : "Connecting to Binance…";
+  document.querySelectorAll("#src button").forEach(b => b.setAttribute("aria-pressed", b.dataset.src === (kind === "sim" ? "sim" : "live")));
+  document.querySelectorAll("#steer button").forEach(b => { b.disabled = kind !== "sim"; });
+  $("#steerNote").hidden = kind === "sim";
+}
+function stopLive() { feedGen++; if (ws) { ws.onopen = ws.onclose = ws.onerror = ws.onmessage = null; try { ws.close(); } catch (e) {} ws = null; } }
+function startSim(reason) {
+  stopLive(); resetMarket(true); setFeed("sim");
+  if (reason) log(reason);
+}
+function connect(i = 0) {
+  const gen = ++feedGen;
+  if (i === 0) { resetMarket(false); setFeed("connecting"); }
+  if (i >= ENDPOINTS.length) return startSim("Couldn't reach Binance, so playing the <b>simulated</b> market instead");
+  const url = ENDPOINTS[i] + "/stream?streams=" + ASSETS.map(a => a.sym + "@aggTrade").join("/");
+  let got = false, failed = false;
+  const fail = () => {
+    if (failed || gen !== feedGen) return; failed = true;
+    try { ws && ws.close(); } catch (e) {}
+    if (got) { setFeed("connecting"); log("Connection dropped. Reconnecting…"); setTimeout(() => gen === feedGen && connect(0), 2000); }
+    else connect(i + 1);
+  };
+  try { ws = new WebSocket(url); } catch (e) { return fail(); }
+  const to = setTimeout(() => { if (!got) fail(); }, 6000);
+  ws.onmessage = e => {
+    if (gen !== feedGen) return;
+    let d; try { d = JSON.parse(e.data).data; } catch (err) { return; }
+    if (!d || !d.s) return;
+    const a = BY_SYM[d.s]; if (!a) return;
+    if (!got) { got = true; clearTimeout(to); setFeed("live"); log("Connected to <b>live</b> Binance trades"); }
+    ingest(a, +d.p, +d.q, d.m ? "sell" : "buy", d.T); // m = buyer is maker, so the taker sold
+  };
+  ws.onerror = () => fail();
+  ws.onclose = () => { clearTimeout(to); fail(); };
+}
+
+/* ---------------- once-a-second analysis ---------------- */
+setInterval(() => {
+  let tr = 0, vr = 0, wsum = 0, rate = 0, bEw = 0, sEw = 0;
+  const W = { BTC: .5, ETH: .3, SOL: .2 };
+  for (const a of ASSETS) {
+    a.rate = a.rate * .7 + a.cnt * .3; a.cnt = 0; rate += a.rate;
+    const k = Math.exp(-1 / 20); a.buyEw *= k; a.sellEw *= k; bEw += a.buyEw; sEw += a.sellEw;
+    if (a.lo === null) continue; // no trades yet on this feed
+    a.hist.push(a.price); if (a.hist.length > 180) a.hist.shift();
+    let lo = a.price, hi = a.price;
+    for (let i = Math.max(0, a.hist.length - 90); i < a.hist.length; i++) { lo = Math.min(lo, a.hist[i]); hi = Math.max(hi, a.hist[i]); }
+    const mid = (lo + hi) / 2, minW = mid * .0008;
+    if (hi - lo < minW) { lo = mid - minW / 2; hi = mid + minW / 2; }
+    a.lo = lo; a.hi = hi;
+    const h = a.hist, n = h.length;
+    a.chg1 = a.price / h[Math.max(0, n - 61)] - 1;
+    if (n >= 10) {
+      const m = Math.min(30, n - 1); let s = 0, s2 = 0;
+      for (let i = n - m; i < n; i++) { const r = Math.log(h[i] / h[i - 1]); s += r; s2 += r * r; }
+      a.volS = Math.sqrt(Math.max(0, s2 / m - (s / m) ** 2));
+      a.volLong = a.volLong ? a.volLong * .97 + a.volS * .03 : a.volS;
+      a.trendZ = clamp(Math.log(a.price / h[n - 1 - m]) / (a.volS * Math.sqrt(m) + 1e-9), -4, 4);
+      tr += W[a.id] * a.trendZ; vr += W[a.id] * a.volS / (a.volLong + 1e-12); wsum += W[a.id];
+    }
+  }
+  S.rateTot = rate; S.buyShare = bEw + sEw ? bEw / (bEw + sEw) : .5;
+  if (wsum) { S.trend = tr / wsum; S.volRatio = vr / wsum; S.target = clamp(Math.round(2.5 - S.trend * .9 + (S.volRatio - 1) * 2.2), 0, 5); }
+  S.targetBpm = Math.round(74 + 62 * (1 - Math.exp(-rate / 30)));
+  if (!S.started) { // keep the HUD moving before sound starts
+    if (S.mode !== S.target) S.mode += Math.sign(S.target - S.mode);
+    S.bpm += clamp(S.targetBpm - S.bpm, -6, 6);
+  }
+}, 1000);
+
+/* ---------------- audio ---------------- */
+let ctx, bus, master, analyser, reverb, delay, delayIn, noiseBuf, nextT = 0, step = 0;
+function buildAudio() {
+  ctx = new (window.AudioContext || window.webkitAudioContext)();
+  bus = ctx.createGain(); master = ctx.createGain(); master.gain.value = +$("#volume").value;
+  const comp = ctx.createDynamicsCompressor(); comp.threshold.value = -16; comp.ratio.value = 4;
+  analyser = ctx.createAnalyser(); analyser.fftSize = 1024;
+  bus.connect(master); master.connect(comp); comp.connect(analyser); analyser.connect(ctx.destination);
+  reverb = ctx.createConvolver();
+  const len = ctx.sampleRate * 3, ir = ctx.createBuffer(2, len, ctx.sampleRate);
+  for (let c = 0; c < 2; c++) { const d = ir.getChannelData(c); for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3.2); }
+  reverb.buffer = ir; const rg = ctx.createGain(); rg.gain.value = .5; reverb.connect(rg); rg.connect(bus);
+  delayIn = ctx.createGain(); delay = ctx.createDelay(2); const fb = ctx.createGain(); fb.gain.value = .36;
+  const dl = ctx.createBiquadFilter(); dl.type = "lowpass"; dl.frequency.value = 2600;
+  delayIn.connect(delay); delay.connect(dl); dl.connect(fb); fb.connect(delay); dl.connect(bus); dl.connect(reverb);
+  delay.delayTime.value = 60 / S.bpm * .75;
+  noiseBuf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+  const nd = noiseBuf.getChannelData(0); for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
+}
+function out(pan = 0, rev = 0, del = 0) {
+  const g = ctx.createGain(), p = ctx.createStereoPanner(); p.pan.value = clamp(pan, -1, 1); g.connect(p); p.connect(bus);
+  if (rev) { const s = ctx.createGain(); s.gain.value = rev; p.connect(s); s.connect(reverb); }
+  if (del) { const s = ctx.createGain(); s.gain.value = del; p.connect(s); s.connect(delayIn); }
+  return g;
+}
+function env(param, t, a, peak, d) { param.setValueAtTime(.0001, t); param.linearRampToValueAtTime(peak, t + a); param.exponentialRampToValueAtTime(.0001, t + a + d); }
+function osc(type, f, t, dur) { const o = ctx.createOscillator(); o.type = type; o.frequency.value = f; o.start(t); o.stop(t + dur); return o; }
+function noise(t, dur) { const n = ctx.createBufferSource(); n.buffer = noiseBuf; n.start(t, Math.random() * .5); n.stop(t + dur); return n; }
+function bass(t, m, v, pan, br) {
+  const f = mtof(m), g = out(pan * .35, .06), fl = ctx.createBiquadFilter(); fl.type = "lowpass"; fl.Q.value = 7;
+  fl.frequency.setValueAtTime(140 + 2200 * v * br, t); fl.frequency.exponentialRampToValueAtTime(90, t + .38);
+  env(g.gain, t, .006, .2 * v + .04, .48);
+  osc("sawtooth", f, t, .6).connect(fl); osc("sawtooth", f * 1.007, t, .6).connect(fl); osc("sine", f / 2, t, .6).connect(fl); fl.connect(g);
+}
+function bells(t, m, v, pan, br) {
+  const f = mtof(m), g = out(pan, .32, .18), car = osc("sine", f, t, 2.2), mod = osc("sine", f * 3.5, t, 2.2), mg = ctx.createGain();
+  mg.gain.setValueAtTime(f * (2 + 5 * v * br), t); mg.gain.exponentialRampToValueAtTime(f * .3, t + 1.2);
+  mod.connect(mg); mg.connect(car.frequency); car.connect(g); env(g.gain, t, .003, .11 * v + .02, 1.9);
+}
+function pluck(t, m, v, pan, br) {
+  const f = mtof(m), g = out(pan, .22, .4), fl = ctx.createBiquadFilter(); fl.type = "lowpass";
+  fl.frequency.setValueAtTime(1500 + 5000 * v * br, t); fl.frequency.exponentialRampToValueAtTime(400, t + .3);
+  osc("triangle", f, t, .5).connect(fl);
+  const sq = osc("square", f * 2, t, .5), sg = ctx.createGain(); sg.gain.value = .15; sq.connect(sg); sg.connect(fl);
+  fl.connect(g); env(g.gain, t, .002, .09 * v + .02, .32);
+}
+const PLAY = { bass, bells, pluck };
+function pad(t, midis, dur, cutoff) {
+  const g = out(0, .7), fl = ctx.createBiquadFilter(); fl.type = "lowpass"; fl.frequency.value = cutoff;
+  g.gain.setValueAtTime(.0001, t); g.gain.linearRampToValueAtTime(.05, t + dur * .35); g.gain.linearRampToValueAtTime(.0001, t + dur);
+  for (const m of midis) { osc("sawtooth", mtof(m) * .997, t, dur).connect(fl); osc("sawtooth", mtof(m) * 1.004, t, dur).connect(fl); }
+  fl.connect(g);
+}
+function kick(t, v) { const o = osc("sine", 160, t, .4), g = out(); o.frequency.setValueAtTime(160, t); o.frequency.exponentialRampToValueAtTime(42, t + .13); env(g.gain, t, .002, .85 * v, .34); o.connect(g); }
+function snare(t, v) {
+  const n = noise(t, .25), bp = ctx.createBiquadFilter(), g = out(0, .25); bp.type = "bandpass"; bp.frequency.value = 1900; bp.Q.value = .8;
+  n.connect(bp); bp.connect(g); env(g.gain, t, .002, .35 * v, .17);
+  const o = osc("triangle", 190, t, .15), og = out(0, .1); env(og.gain, t, .002, .25 * v, .09); o.connect(og);
+}
+function hat(t, v, open) {
+  const n = noise(t, open ? .3 : .08), hp = ctx.createBiquadFilter(), g = out((Math.random() - .5) * .5, .05);
+  hp.type = "highpass"; hp.frequency.value = 7800; n.connect(hp); hp.connect(g); env(g.gain, t, .001, .13 * v, open ? .22 : .035);
+}
+function gong(t, side, v) {
+  const f = mtof(36 + S.root + (side === "buy" ? 12 : 0));
+  for (const [r, a] of [[1, 1], [1.48, .6], [2.03, .5], [2.74, .35], [3.11, .3], [4.2, .15]]) {
+    const g = out(side === "buy" ? .5 : -.5, .9, .1); env(g.gain, t, .004, .16 * v * a, 5.5 / Math.sqrt(r)); osc("sine", f * r, t, 6).connect(g);
+  }
+}
+function midiFor(a, d) { const st = MODES[S.mode].steps; return a.base + S.root + 12 * Math.floor(d / 7) + st[((d % 7) + 7) % 7]; }
+function snap(d) { const set = [S.chord % 7, (S.chord + 2) % 7, (S.chord + 4) % 7];
+  for (let k = 0; k < 4; k++) for (const s of [d - k, d + k]) if (s >= 0 && set.includes(s % 7)) return s; return d; }
+function onBar(t) {
+  if (S.mode !== S.target) { S.mode += Math.sign(S.target - S.mode); log(`Mode → <b>${MODES[S.mode].name}</b> · ${MODES[S.mode].mood}`); }
+  S.bpm += clamp(S.targetBpm - S.bpm, -6, 6);
+  delay.delayTime.setTargetAtTime(60 / S.bpm * .75, t, .2);
+  S.chord = PROG[S.bar++ % 4];
+  if (S.pad) { const st = MODES[S.mode].steps;
+    pad(t, [S.chord, S.chord + 2, S.chord + 4].map(d => 48 + S.root + 12 * Math.floor(d / 7) + st[d % 7]), 60 / S.bpm * 4 * 1.08, 350 + 2800 * S.buyShare); }
+}
+function scheduleStep(t) {
+  const s = step % 16; if (s === 0) onBar(t);
+  const I = 1 - Math.exp(-S.rateTot / 35);
+  if (S.drums) {
+    if (s % 4 === 0 && I > .1) kick(t, .9);
+    if ((s === 10 && I > .55) || (s === 14 && I > .8)) kick(t, .55);
+    if ((s === 4 || s === 12) && (S.volRatio > 1.15 || I > .45)) snare(t, .9);
+    if (Math.random() < (s % 2 ? .25 + .6 * I : .1 + .3 * I)) hat(t, s % 4 === 2 ? 1 : .6, s === 14 && I > .6);
+  }
+  for (const a of ASSETS) {
+    const pd = a.pend; if (!pd.n || (a.inst === "bass" && s % 2)) continue;
+    a.typ = a.typ * .95 + pd.usd * .05;
+    const v = clamp(.45 + .18 * Math.log2((pd.usd + 1) / (a.typ + 1)), .12, 1);
+    let d = Math.round(clamp((a.price - a.lo) / ((a.hi - a.lo) || 1), 0, 1) * (a.span - 1)); if (s % 4 === 0) d = snap(d);
+    if (a.on) PLAY[a.inst](t, midiFor(a, d), v, (pd.buy - pd.sell) / (pd.usd || 1) * .8, pd.buy >= pd.sell ? 1.25 : .75);
+    a.pend = { n: 0, usd: 0, buy: 0, sell: 0 };
+  }
+}
+let schedTimer = null;
+function scheduler() { while (nextT < ctx.currentTime + .12) { scheduleStep(nextT); nextT += 60 / S.bpm / 4; step++; } }
+async function toggleSound() {
+  const b = $("#play");
+  if (!ctx) buildAudio();
+  if (!S.started) {
+    await ctx.resume();
+    for (const a of ASSETS) a.pend = { n: 0, usd: 0, buy: 0, sell: 0 };
+    S.started = true; nextT = ctx.currentTime + .1; schedTimer = setInterval(scheduler, 25);
+    b.textContent = "❚❚"; b.classList.add("on"); b.setAttribute("aria-label", "Stop sound"); $("#hint").hidden = true;
+    log("Sound on: the market is <b>audible</b>");
+  } else {
+    S.started = false; clearInterval(schedTimer); await ctx.suspend();
+    if ("speechSynthesis" in window) speechSynthesis.cancel();
+    b.textContent = "▶"; b.classList.remove("on"); b.setAttribute("aria-label", "Start sound");
+  }
+}
+
+/* ---------------- voice ---------------- */
+let lastSay = 0;
+function say(text) {
+  if (!S.voice || !S.started || !("speechSynthesis" in window)) return;
+  const now = performance.now(); if (now - lastSay < 4000) return; lastSay = now;
+  try {
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text); u.rate = 1.05; u.pitch = .9;
+    const v = speechSynthesis.getVoices().find(v => /^en/i.test(v.lang)); if (v) u.voice = v;
+    u.onstart = () => master.gain.setTargetAtTime(+$("#volume").value * .45, ctx.currentTime, .08);
+    u.onend = u.onerror = () => master.gain.setTargetAtTime(+$("#volume").value, ctx.currentTime, .3);
+    speechSynthesis.speak(u);
+  } catch (e) { /* speech is optional */ }
+}
+
+/* ---------------- drawing ---------------- */
+const ring = $("#ring"), rg = ring.getContext("2d"), scope = $("#scope"), sg = scope.getContext("2d");
+const DPR = Math.min(window.devicePixelRatio || 1, 2), TAU = Math.PI * 2, LAP = 60000;
+new ResizeObserver(es => { for (const e of es) { const c = e.target, r = c.getBoundingClientRect(); c.width = Math.max(1, r.width * DPR); c.height = Math.max(1, r.height * DPR); } }).observe(ring);
+new ResizeObserver(es => { for (const e of es) { const c = e.target, r = c.getBoundingClientRect(); c.width = Math.max(1, r.width * DPR); c.height = Math.max(1, r.height * DPR); } }).observe(scope);
+let tBuf = null;
+function level() { if (!analyser || !S.started) return 0; tBuf ||= new Float32Array(analyser.fftSize); analyser.getFloatTimeDomainData(tBuf);
+  let s = 0; for (let i = 0; i < tBuf.length; i += 4) s += tBuf[i] ** 2; return Math.sqrt(s / (tBuf.length / 4)); }
+function polar(a, p, age, cx, cy, R) {
+  const pos = clamp((p - a.lo) / ((a.hi - a.lo) || 1), 0, 1), r = R * (a.band[0] + pos * (a.band[1] - a.band[0])), ang = -Math.PI / 2 + age / LAP * TAU;
+  return [cx + Math.cos(ang) * r, cy + Math.sin(ang) * r];
+}
+function draw(now) {
+  const W = ring.width, H = ring.height, cx = W / 2, cy = H / 2 + 10 * DPR, R = Math.min(W, H) * .44, lv = level();
+  rg.globalCompositeOperation = "source-over"; rg.globalAlpha = 1; rg.clearRect(0, 0, W, H);
+  rg.lineWidth = DPR;
+  for (const a of ASSETS) for (const b of a.band) { rg.strokeStyle = "rgba(120,140,180,.12)"; rg.beginPath(); rg.arc(cx, cy, R * b, 0, TAU); rg.stroke(); }
+  rg.font = `${9.5 * DPR}px "JetBrains Mono",monospace`;
+  for (const a of ASSETS) { rg.fillStyle = a.color; rg.globalAlpha = a.on ? .75 : .25; rg.fillText(a.id, cx + 5 * DPR, cy - R * a.band[1] + 11 * DPR); }
+  rg.globalAlpha = 1;
+  const sw = rg.createLinearGradient(cx, cy - R * 1.02, cx, cy - R * .15); sw.addColorStop(0, "rgba(90,169,255,.9)"); sw.addColorStop(1, "rgba(90,169,255,0)");
+  rg.strokeStyle = sw; rg.lineWidth = 1.5 * DPR; rg.beginPath(); rg.moveTo(cx, cy - R * .15); rg.lineTo(cx, cy - R * 1.02); rg.stroke();
+  rg.globalCompositeOperation = "lighter";
+  let total = 0; for (const a of ASSETS) total += a.parts.length;
+  for (const a of ASSETS) {
+    while (a.parts.length && (now - a.parts[0].t > LAP || total > 3600)) { a.parts.shift(); total--; }
+    const dim = a.on ? 1 : .25;
+    rg.strokeStyle = a.color; rg.lineWidth = .7 * DPR;
+    for (let b = 0; b < 6; b++) {
+      rg.globalAlpha = .22 * (1 - b / 6) * dim; rg.beginPath(); let first = true;
+      for (const p of a.parts) { const age = now - p.t; if (age < b * 1e4 - 300 || age > (b + 1) * 1e4) continue;
+        const [x, y] = polar(a, p.p, age, cx, cy, R); first ? rg.moveTo(x, y) : rg.lineTo(x, y); first = false; }
+      rg.stroke();
+    }
+    for (const p of a.parts) {
+      const age = now - p.t, [x, y] = polar(a, p.p, age, cx, cy, R), s = DPR * (1 + Math.log10(1 + p.usd / 1500) * 1.3);
+      rg.globalAlpha = .9 * (1 - age / LAP) * dim; rg.fillStyle = p.side === "buy" ? "#39f0a0" : "#ff5c93";
+      if (s > 3.5 * DPR) { rg.beginPath(); rg.arc(x, y, s, 0, TAU); rg.fill(); } else rg.fillRect(x - s / 2, y - s / 2, s, s);
+      if (age < 400) { rg.globalAlpha = (1 - age / 400) * dim; rg.fillStyle = "#fff"; rg.beginPath(); rg.arc(x, y, s + 3 * DPR * (1 - age / 400), 0, TAU); rg.fill(); }
+    }
+  }
+  rg.globalAlpha = 1;
+  const cr = R * (.1 + Math.min(lv * 1.6, .12)), cg = rg.createRadialGradient(cx, cy, 0, cx, cy, cr * 1.8);
+  cg.addColorStop(0, `rgba(90,169,255,${.35 + lv})`); cg.addColorStop(.5, "rgba(90,169,255,.12)"); cg.addColorStop(1, "rgba(90,169,255,0)");
+  rg.fillStyle = cg; rg.beginPath(); rg.arc(cx, cy, cr * 1.8, 0, TAU); rg.fill();
+  rg.strokeStyle = "rgba(160,200,255,.6)"; rg.lineWidth = DPR; rg.beginPath(); rg.arc(cx, cy, cr, 0, TAU); rg.stroke();
+  for (let i = waves.length - 1; i >= 0; i--) { const w = waves[i], age = now - w.t; if (age > 2500) { waves.splice(i, 1); continue; }
+    const [x, y] = polar(w.a, w.part.p, now - w.part.t, cx, cy, R), k = age / 2500;
+    rg.globalAlpha = 1 - k; rg.strokeStyle = w.a.color; rg.lineWidth = 2 * DPR; rg.beginPath(); rg.arc(x, y, 6 * DPR + k * R * .5, 0, TAU); rg.stroke(); }
+  rg.globalCompositeOperation = "source-over"; rg.font = `600 ${9.5 * DPR}px "JetBrains Mono",monospace`;
+  for (let i = callouts.length - 1; i >= 0; i--) { const c = callouts[i], age = now - c.t; if (age > 8000) { callouts.splice(i, 1); continue; }
+    // Tags stack in the lower-left corner (newest at the bottom), with a leader line to their trade.
+    const [x, y] = polar(c.a, c.part.p, now - c.part.t, cx, cy, R), tw = rg.measureText(c.text).width + 12 * DPR, th = 19 * DPR;
+    const bx = 12 * DPR, by = H - 52 * DPR - th - (callouts.length - 1 - i) * (th + 6 * DPR);
+    rg.globalAlpha = age > 6500 ? 1 - (age - 6500) / 1500 : 1; rg.strokeStyle = c.a.color; rg.lineWidth = DPR;
+    rg.beginPath(); rg.moveTo(x, y); rg.lineTo(bx, by + th); rg.stroke();
+    rg.fillStyle = "rgba(7,10,18,.88)"; rg.fillRect(bx, by, tw, th); rg.strokeRect(bx, by, tw, th);
+    rg.fillStyle = c.side === "buy" ? "#39f0a0" : "#ff5c93"; rg.fillText(c.text, bx + 6 * DPR, by + 13 * DPR); }
+  rg.globalAlpha = 1;
+  // scope
+  const sw2 = scope.width, sh = scope.height; sg.clearRect(0, 0, sw2, sh);
+  sg.strokeStyle = "rgba(90,169,255,.75)"; sg.lineWidth = 1.5 * DPR; sg.beginPath();
+  if (tBuf && S.started) { for (let i = 0; i < tBuf.length; i += 2) { const x = i / tBuf.length * sw2, y = sh / 2 - tBuf[i] * sh * 1.4; i ? sg.lineTo(x, y) : sg.moveTo(x, y); } }
+  else { sg.moveTo(0, sh / 2); sg.lineTo(sw2, sh / 2); }
+  sg.stroke();
+  requestAnimationFrame(draw);
+}
+
+/* ---------------- panels ---------------- */
+const modebar = $("#modebar"); MODES.forEach(() => modebar.appendChild(document.createElement("span")));
+const keySel = $("#key"); KEYS.forEach((k, i) => keySel.add(new Option(k, i, i === 2, i === 2)));
+const pv = $("#p-voices");
+for (const a of ASSETS) {
+  const row = document.createElement("div"); row.className = "voice";
+  row.innerHTML = `<button class="chip" aria-pressed="true" aria-label="Mute ${a.id}"><i style="background:${a.color}"></i>${a.id}</button>
+    <span><span class="chg"></span> <span class="inst">· ${a.inst}</span></span><span class="px"></span>
+    <div class="press" aria-hidden="true"><b></b></div><div class="vmeta"><span class="rate"></span><span class="share"></span></div>`;
+  const chip = row.querySelector(".chip");
+  chip.onclick = () => { a.on = !a.on; chip.setAttribute("aria-pressed", a.on); chip.setAttribute("aria-label", (a.on ? "Mute " : "Unmute ") + a.id); };
+  a.row = row; pv.appendChild(row);
+}
+function update() {
+  const M = MODES[S.mode];
+  $("#mode").textContent = M.name;
+  $("#mood").textContent = M.mood + (S.target !== S.mode ? ` → ${MODES[S.target].mood}` : "");
+  $("#hudMeta").textContent = `${S.bpm} BPM · key ${KEYS[S.root]} · trend ${S.trend >= 0 ? "+" : "−"}${Math.abs(S.trend).toFixed(1)}`;
+  [...modebar.children].forEach((el, i) => el.classList.toggle("on", i === S.mode));
+  for (const a of ASSETS) {
+    if (a.lo === null) { a.row.querySelector(".px").textContent = "waiting…"; continue; }
+    const r = a.row, share = a.buyEw + a.sellEw ? a.buyEw / (a.buyEw + a.sellEw) : .5;
+    r.querySelector(".px").textContent = a.price.toLocaleString("en-US", { minimumFractionDigits: a.dp, maximumFractionDigits: a.dp });
+    const c = r.querySelector(".chg"); c.textContent = fmtPct(a.chg1); c.className = "chg " + (a.chg1 >= 0 ? "up" : "down");
+    r.querySelector(".press b").style.width = (share * 100).toFixed(1) + "%";
+    r.querySelector(".rate").textContent = a.rate.toFixed(1) + " trades/s";
+    r.querySelector(".share").textContent = `buys ${Math.round(share * 100)}% · sells ${100 - Math.round(share * 100)}%`;
+  }
+}
+setInterval(update, 250);
+function log(html) {
+  const li = document.createElement("li"); li.innerHTML = `<time>${clock()}</time>${html}`;
+  const ul = $("#log"); ul.prepend(li); while (ul.children.length > 40) ul.lastChild.remove();
+}
+
+/* ---------------- controls ---------------- */
+document.querySelectorAll('[role="tab"]').forEach(t => t.onclick = () => {
+  document.querySelectorAll('[role="tab"]').forEach(o => { const on = o === t; o.setAttribute("aria-selected", on); $("#" + o.getAttribute("aria-controls")).hidden = !on; });
+});
+document.querySelectorAll("#steer button").forEach(b => b.onclick = () => {
+  S.steer = b.dataset.s;
+  document.querySelectorAll("#steer button").forEach(o => o.setAttribute("aria-pressed", o === b));
+  log(`Simulation → <b>${b.firstChild.textContent}</b>`);
+});
+document.querySelectorAll(".tg").forEach(b => b.onclick = () => {
+  const k = b.dataset.t; S[k] = !S[k]; b.setAttribute("aria-pressed", S[k]);
+  if (k === "voice" && !S.voice && "speechSynthesis" in window) speechSynthesis.cancel();
+});
+keySel.onchange = () => { S.root = +keySel.value; log(`Key → <b>${KEYS[S.root]}</b>`); };
+$("#whale").onchange = e => { S.whale = +e.target.value; };
+$("#volume").oninput = e => { if (master) master.gain.setTargetAtTime(+e.target.value, ctx.currentTime, .05); };
+$("#play").onclick = toggleSound;
+document.querySelectorAll("#src button").forEach(b => b.onclick = () => {
+  if (b.dataset.src === "sim") { if (S.feed !== "sim") startSim("Switched to the <b>simulated</b> market"); }
+  else if (S.feed === "sim") connect(0);
+});
+
+log("Tap ▶ to hear the market.");
+if (/[?&]sim\b/.test(location.search)) startSim("Started on the <b>simulated</b> market"); else connect(0);
+update();
+requestAnimationFrame(draw);
+</script>
+</body>
+</html>
